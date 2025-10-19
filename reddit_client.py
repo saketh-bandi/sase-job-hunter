@@ -9,18 +9,19 @@ from praw.exceptions import PRAWException
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 
-from config import ATS_DOMAINS
+from utils import (
+    unwrap_shorteners, is_external_job_link, validate_job_url, 
+    extract_experience_requirements
+)
+
+from config import (
+    ATS_DOMAINS, INTERNSHIP_KEYWORDS, INTERNSHIP_BLOCKLIST, 
+    NEW_GRAD_KEYWORDS, NEW_GRAD_BLOCKLIST, HIRING_KEYWORDS
+)
 
 # --- Constants ---
 MAX_VALIDATIONS_PER_RUN = 50
 VALIDATION_COUNTER = 0
-
-# Keywords for student-friendly job posts
-STUDENT_FRIENDLY_TOKENS = [
-    'intern', 'internship', 'new grad', 'new-grad', 'entry level',
-    'junior', 'university', 'campus', 'early career', 'undergrad',
-    'undergraduate', 'freshman', 'sophomore', 'co-op'
-]
 
 # Patterns to identify and block megathreads
 MEGATHREAD_PATTERNS = [
@@ -66,7 +67,12 @@ def is_external_job_link(url: str) -> bool:
     if not url or not url.startswith('http'):
         return False
 
-    parsed_url = urlparse(url)
+    try:
+        parsed_url = urlparse(url)
+    except ValueError:
+        print(f"⚠️  Could not parse URL: {url}")
+        return False
+        
     domain = parsed_url.netloc.lower()
     path = parsed_url.path.lower()
 
@@ -116,59 +122,18 @@ def validate_job_url(url: str) -> tuple[bool, str]:
     except (RequestException, Timeout):
         return False, url
 
-def extract_experience_requirements(url: str) -> str:
-    """
-    Fetches the job page and tries to extract experience requirements.
-    Returns a string with the findings.
-    """
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/104.0.0.0 Safari/537.36'}
-        response = requests.get(url, headers=headers, timeout=5)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.content, 'html.parser')
-        
-        text = soup.get_text().lower()
-        
-        patterns = [
-            r'(\d+\+?)\s+years? of experience',
-            r'graduating between (\w+\s+\d{4}) and (\w+\s+\d{4})',
-            r'pursuing a degree in .* and graduating in (\d{4})',
-            r'class of (\d{4})',
-            r'(freshman|sophomore|junior|senior|undergraduate|undergrad|masters|phd)',
-            r'co-op'
-        ]
-        
-        found_requirements = []
-        
-        for pattern in patterns:
-            matches = re.findall(pattern, text)
-            if matches:
-                for match in matches:
-                    if isinstance(match, tuple):
-                        found_requirements.append(" ".join(match))
-                    else:
-                        found_requirements.append(match)
-
-        if found_requirements:
-            return ", ".join(list(set(found_requirements)))
-            
-        return "N/A"
-        
-    except (RequestException, Timeout):
-        return "Could not fetch."
-    except Exception:
-        return "Error parsing."
-
 # --- Core Fetching and Filtering Logic ---
-def fetch_raw_posts(subreddits: list[str], limit: int) -> list[dict]:
-    """For each subreddit, pull the newest posts."""
+def fetch_raw_posts(subreddits: list[str], limit: int, keywords: list[str]) -> list[dict]:
+    """For each subreddit, pull the newest posts based on a keyword search."""
     reddit = get_reddit_client()
     all_posts = []
-    print(f"Fetching raw posts from {len(subreddits)} subreddits...")
+    print(f"Fetching raw posts from {len(subreddits)} subreddits for keywords: {', '.join(keywords)}...")
     for sub in subreddits:
         try:
             subreddit = reddit.subreddit(sub)
-            posts = list(subreddit.new(limit=limit))
+            # Using search instead of new
+            query = ' OR '.join(f'title:"{k}"' for k in keywords)
+            posts = list(subreddit.search(query, sort='new', limit=limit))
             print(f"  - Fetched {len(posts)} posts from r/{sub}")
             for post in posts:
                 all_posts.append({
@@ -182,7 +147,7 @@ def fetch_raw_posts(subreddits: list[str], limit: int) -> list[dict]:
             print(f"Error fetching from r/{sub}: {e}. Skipping...")
     return all_posts
 
-def filter_and_rank_jobs(posts: list[dict]) -> tuple[list[dict], dict]:
+def filter_and_rank_jobs(posts: list[dict], title_blocklist: list[str], job_keywords: list[str]) -> tuple[list[dict], dict]:
     """
     Filters posts for valid, student-friendly jobs.
     """
@@ -190,10 +155,10 @@ def filter_and_rank_jobs(posts: list[dict]) -> tuple[list[dict], dict]:
     url_pattern = r'https?://[^\s()<>]+(?<![.,!?:;])'
     
     counters = {
-        "matched_by_title": 0,
-        "matched_by_body": 0,
-        "matched_by_ats_link": 0,
+        "matched_by_keyword": 0,
         "blocked_megathread": 0,
+        "blocked_title": 0,
+        "blocked_no_hiring_intent": 0,
         "invalid_link": 0,
         "stickied": 0,
         "no_link": 0,
@@ -208,6 +173,16 @@ def filter_and_rank_jobs(posts: list[dict]) -> tuple[list[dict], dict]:
         selftext = post['selftext']
         title_lower = title.lower()
 
+        # Combined keyword and hiring intent check
+        if not (any(job_kw in title_lower for job_kw in job_keywords) and \
+                any(hiring_kw in title_lower for hiring_kw in HIRING_KEYWORDS)):
+            counters["blocked_no_hiring_intent"] += 1
+            continue
+
+        if any(word in title_lower for word in title_blocklist):
+            counters["blocked_title"] += 1
+            continue
+
         if any(re.search(p, title, re.IGNORECASE) for p in MEGATHREAD_PATTERNS):
             counters["blocked_megathread"] += 1
             continue
@@ -219,26 +194,10 @@ def filter_and_rank_jobs(posts: list[dict]) -> tuple[list[dict], dict]:
         unwrapped_urls = [unwrap_shorteners(url) for url in found_urls]
         external_urls = [url for url in unwrapped_urls if is_external_job_link(url)]
         
-        matched_title = any(token in title_lower for token in STUDENT_FRIENDLY_TOKENS)
-        matched_body = any(token in selftext.lower() for token in STUDENT_FRIENDLY_TOKENS)
-        
-        ats_links = [url for url in external_urls if any(ats in urlparse(url).netloc for ats in ATS_DOMAINS)]
-        matched_ats = bool(ats_links)
-
-        if matched_title:
-            counters["matched_by_title"] += 1
-        if matched_body:
-            counters["matched_by_body"] += 1
-        if matched_ats:
-            counters["matched_by_ats_link"] += 1
-
-        if not (matched_title or matched_body or matched_ats):
-            continue
+        counters["matched_by_keyword"] += 1
 
         url_to_validate = None
-        if ats_links:
-            url_to_validate = ats_links[0]
-        elif external_urls:
+        if external_urls:
             url_to_validate = external_urls[0]
         
         if not url_to_validate:
@@ -260,13 +219,19 @@ def normalize_to_jobposts(posts: list[dict]) -> list[dict]:
     """Maps filtered posts to the final JobPost schema."""
     job_posts = []
     for post in posts:
-        tags = [kw for kw in STUDENT_FRIENDLY_TOKENS if kw in post["title"].lower()]
+        title = post["title"].strip()
+        # Remove [Hiring] tag for cleaner output
+        if "[hiring]" in title.lower():
+            title = re.sub(r'\[hiring\]', '', title, flags=re.IGNORECASE).strip()
+
+        all_keywords = INTERNSHIP_KEYWORDS + NEW_GRAD_KEYWORDS
+        tags = [kw for kw in all_keywords if kw in post["title"].lower()]
         
         experience = extract_experience_requirements(post["url"])
         
         job_posts.append({
             "id": post["id"],
-            "title": post["title"].strip(),
+            "title": title,
             "url": post["url"],
             "source": f"r/{post['subreddit']}",
             "created_utc": post["created_utc"],
@@ -278,19 +243,44 @@ def normalize_to_jobposts(posts: list[dict]) -> list[dict]:
 
 # --- Main Orchestrator ---
 def fetch_ranked_cs_jobs(subreddits: list[str], limit: int) -> tuple[list[dict], dict]:
-    """Orchestrates the full job fetching, filtering, and ranking pipeline."""
+    """Orchestrates the full job fetching, filtering, and ranking pipeline with a two-pass strategy."""
     global VALIDATION_COUNTER
     VALIDATION_COUNTER = 0
     
-    stats = {}
-    raw_posts = fetch_raw_posts(subreddits, limit)
-    stats['fetched'] = len(raw_posts)
+    stats = {"internship_pass": {}, "new_grad_pass": {}}
+    
+    # --- Pass 1: Internship Hunt ---
+    print("--- Starting Internship Hunt ---")
+    internship_posts = fetch_raw_posts(subreddits, limit, INTERNSHIP_KEYWORDS)
+    stats["internship_pass"]['fetched'] = len(internship_posts)
 
-    valid_jobs, filter_stats = filter_and_rank_jobs(raw_posts)
-    stats['filtered'] = len(valid_jobs)
-    stats['skipped'] = filter_stats
+    valid_internships, intern_filter_stats = filter_and_rank_jobs(internship_posts, INTERNSHIP_BLOCKLIST, INTERNSHIP_KEYWORDS)
+    stats["internship_pass"]['filtered'] = len(valid_internships)
+    stats["internship_pass"]['skipped'] = intern_filter_stats
 
-    final_jobs = normalize_to_jobposts(valid_jobs)
+    # --- Pass 2: New-Grad Hunt ---
+    print("\n--- Starting New-Grad Hunt ---")
+    new_grad_posts = fetch_raw_posts(subreddits, limit, NEW_GRAD_KEYWORDS)
+    stats["new_grad_pass"]['fetched'] = len(new_grad_posts)
+
+    valid_new_grad, new_grad_filter_stats = filter_and_rank_jobs(new_grad_posts, NEW_GRAD_BLOCKLIST, NEW_GRAD_KEYWORDS)
+    stats["new_grad_pass"]['filtered'] = len(valid_new_grad)
+    stats["new_grad_pass"]['skipped'] = new_grad_filter_stats
+    
+    # --- Merge, De-duplicate, and Normalize ---
+    combined_valid_posts = valid_internships + valid_new_grad
+    
+    # De-duplicate based on post ID
+    seen_ids = set()
+    unique_posts = []
+    for post in combined_valid_posts:
+        if post['id'] not in seen_ids:
+            unique_posts.append(post)
+            seen_ids.add(post['id'])
+            
+    stats['total_unique_posts'] = len(unique_posts)
+
+    final_jobs = normalize_to_jobposts(unique_posts)
     
     final_jobs.sort(key=lambda x: x["created_utc"], reverse=True)
 

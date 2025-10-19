@@ -59,23 +59,56 @@ def main():
     print(f"Fetched {len(simplify_jobs)} jobs from SimplifyJobs GitHub.")
 
     # --- Merge and Process ---
-    all_jobs = reddit_jobs + simplify_jobs
-    all_jobs.sort(key=lambda x: x["created_utc"], reverse=True)
+    # De-duplicate and filter jobs from each source individually
+    new_reddit_jobs = filter_already_posted(deduplicate_jobs_in_run(reddit_jobs), posted_urls)
+    new_simplify_jobs = filter_already_posted(deduplicate_jobs_in_run(simplify_jobs), posted_urls)
 
-    # De-duplicate jobs from the current run
-    unique_jobs_this_run = deduplicate_jobs_in_run(all_jobs)
+    # For summary purposes, get a list of all unique new jobs found
+    new_jobs = deduplicate_jobs_in_run(new_reddit_jobs + new_simplify_jobs)
+
+    # --- Priority-based merging ---
+    final_jobs = []
+    seen_urls = set()
+
+    # 1. Add all new Reddit jobs (priority)
+    for job in new_reddit_jobs:
+        url_key = job['url'].split('?')[0].rstrip('/')
+        if url_key not in seen_urls:
+            final_jobs.append(job)
+            seen_urls.add(url_key)
+
+    # 2. Add new Simplify jobs until the limit is reached
+    for job in new_simplify_jobs:
+        if len(final_jobs) >= MAX_POSTS_PER_RUN:
+            break
+        url_key = job['url'].split('?')[0].rstrip('/')
+        if url_key not in seen_urls:
+            final_jobs.append(job)
+            seen_urls.add(url_key)
     
-    # Filter out jobs that have been posted on previous days
-    new_jobs = filter_already_posted(unique_jobs_this_run, posted_urls)
+    # Ensure the final list does not exceed the maximum number of posts
+    final_jobs = final_jobs[:MAX_POSTS_PER_RUN]
 
-    final_jobs = new_jobs[:MAX_POSTS_PER_RUN]
+    # Sort the final list by date for display
+    final_jobs.sort(key=lambda x: x["created_utc"], reverse=True)
 
     # --- Display Results ---
     print("\n--- Summary ---")
-    print(f"Reddit: Fetched {reddit_stats.get('fetched', 0)} posts, Found {len(reddit_jobs)} jobs")
-    for reason, count in reddit_stats.get('skipped', {}).items():
-        if count > 0:
-            print(f"  - Skipped {count} Reddit posts (reason: {reason})")
+    if "internship_pass" in reddit_stats:
+        print("Reddit - Internship Pass:")
+        intern_stats = reddit_stats["internship_pass"]
+        print(f"  - Fetched {intern_stats.get('fetched', 0)} posts, Found {intern_stats.get('filtered', 0)} jobs")
+        for reason, count in intern_stats.get('skipped', {}).items():
+            if count > 0:
+                print(f"    - Skipped {count} posts (reason: {reason})")
+
+    if "new_grad_pass" in reddit_stats:
+        print("Reddit - New Grad Pass:")
+        new_grad_stats = reddit_stats["new_grad_pass"]
+        print(f"  - Fetched {new_grad_stats.get('fetched', 0)} posts, Found {new_grad_stats.get('filtered', 0)} jobs")
+        for reason, count in new_grad_stats.get('skipped', {}).items():
+            if count > 0:
+                print(f"    - Skipped {count} posts (reason: {reason})")
 
     print(f"SimplifyJobs: Found {len(simplify_jobs)} jobs")
     for reason, count in simplify_stats.items():
@@ -112,14 +145,8 @@ def main():
     print(f"\nPosting {len(final_jobs)} jobs to Discord…")
         # Inside main.py
 
-    # --- 2. INSPECTION POINT 2 ---
-    if final_jobs:
-        print("\n--- 2. DATA BEFORE SENDING ---")
-        print(final_jobs[0])
-        print("------------------------------\n")
-    # ----------------------------
+   
 
-    send_to_discord(final_jobs, limit=10)
     send_to_discord(final_jobs, limit=10)
     print("Posted to Discord call returned.")
 
