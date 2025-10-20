@@ -4,8 +4,8 @@ import hashlib
 import re
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
-from utils import validate_job_url, unwrap_shorteners, extract_experience_requirements
-from config import SIMPLIFY_GITHUB_RAW, ATS_DOMAINS, SIMPLIFY_KEYWORDS
+from reddit_client import validate_job_url, unwrap_shorteners, STUDENT_FRIENDLY_TOKENS, extract_experience_requirements
+from config import SIMPLIFY_GITHUB_RAW, ATS_DOMAINS
 
 def fetch_simplify_jobs():
     """Fetch and parse jobs from the SimplifyJobs GitHub repository (HTML-based table)."""
@@ -53,7 +53,7 @@ def fetch_simplify_jobs():
             continue
 
         title_lower = f"{company} {role}".lower()
-        if not any(t in title_lower for t in SIMPLIFY_KEYWORDS):
+        if not any(t in title_lower for t in STUDENT_FRIENDLY_TOKENS):
             skip_reasons["not_student_friendly"] += 1
             continue
 

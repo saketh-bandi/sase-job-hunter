@@ -46,7 +46,7 @@ def get_reddit_client():
     reddit = praw.Reddit(
         client_id=os.getenv("REDDIT_CLIENT_ID"),
         client_secret=os.getenv("REDDIT_CLIENT_SECRET"),
-        user_agent=os.getenv("REDDIT_USER_AGENT"),
+        user_agent="SASE Job Hunter Bot v1 by u/SASE_Job_Hunter"
     )
     return reddit
 
@@ -70,7 +70,7 @@ def is_external_job_link(url: str) -> bool:
     try:
         parsed_url = urlparse(url)
     except ValueError:
-        print(f"⚠️  Could not parse URL: {url}")
+        print(f" Could not parse URL: {url}")
         return False
         
     domain = parsed_url.netloc.lower()

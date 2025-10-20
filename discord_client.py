@@ -5,7 +5,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 
-# Load .env from the project root explicitly
+# Loads .env from the project root 
 DOTENV_PATH = Path(__file__).resolve().parent / ".env"
 load_dotenv(dotenv_path=DOTENV_PATH, override=True)
 
@@ -32,13 +32,13 @@ def send_to_discord(jobs, limit=10):
     from datetime import datetime
 
     if not webhook_url:
-        print("⚠️  No Discord webhook found in .env")
+        print(" No Discord webhook found in .env")
         return
 
     jobs = (jobs or [])[:max(0, int(limit))]
 
     if not jobs:
-        print("ℹ️  No jobs to send to Discord.")
+        print("No jobs to send to Discord.")
         return
 
     def job_to_embed(job: dict) -> dict:
@@ -75,7 +75,7 @@ def send_to_discord(jobs, limit=10):
         try:
             resp = requests.post(webhook_url, json=payload, timeout=12)
             if resp.status_code == 204 or resp.status_code == 200:
-                print(f"✅  Chunk {i//BATCH+1}/{batches} sent")
+                print(f"chunk {i//BATCH+1}/{batches} sent")
             elif resp.status_code == 429:
                 retry = int(resp.headers.get("Retry-After", "1"))
                 print(f"⏳  Rate limited. Sleeping {retry}s…")
@@ -83,7 +83,7 @@ def send_to_discord(jobs, limit=10):
                 # retry once
                 resp2 = requests.post(webhook_url, json=payload, timeout=12)
                 if resp2.status_code in (200, 204):
-                    print(f"✅  Chunk {i//BATCH+1}/{batches} sent after retry")
+                    print(f"chunk {i//BATCH+1}/{batches} sent after retry")
                 else:
                     print(f"⚠️  Discord 429 retry failed: {resp2.status_code} - {resp2.text[:300]}")
             else:
@@ -91,17 +91,17 @@ def send_to_discord(jobs, limit=10):
         except requests.RequestException as e:
             print(f"⚠️  Network error posting chunk {i//BATCH+1}: {e}")
 
-    print("✅ Job listings sent to Discord.")
+    print("Job listings sent to Discord.")
 
 
 # ⬇️ Run this only when executing directly, not when importing
 if __name__ == "__main__":
     print(f"Using .env at: {DOTENV_PATH}")
     if not webhook_url:
-        print("⚠️  DISCORD_WEBHOOK_URL missing in .env")
+        print("DISCORD_WEBHOOK_URL missing in .env")
         sys.exit(1)
     if webhook_url.startswith("httpshttps://"):
-        print("⚠️  Found 'httpshttps://'. Fixing automatically for this run.")
+        print("Found 'httpshttps://'. Fixing automatically for this run.")
         webhook_url = webhook_url.replace("httpshttps://", "https://", 1)
     print(f"Attempting to send a test message to {mask(webhook_url)}")
     payload = {"content": "SASE job hunter bot test", "username": "SASE Job Hunter Bot"}
@@ -109,7 +109,7 @@ if __name__ == "__main__":
         resp = requests.post(webhook_url, json=payload, timeout=10)
         print("HTTP status:", resp.status_code)
         if resp.status_code == 204:
-            print("✅ test message was sent")
+            print("test message was sent")
         else:
             print("Response (first 300 chars):", resp.text[:300])
     except requests.RequestException as e:
