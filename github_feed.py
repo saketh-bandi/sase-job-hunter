@@ -1,29 +1,45 @@
+# In github_feed.py
+
 import requests
 import time
 import hashlib
 import re
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
-from reddit_client import validate_job_url, unwrap_shorteners, STUDENT_FRIENDLY_TOKENS, extract_experience_requirements
-from config import SIMPLIFY_GITHUB_RAW, ATS_DOMAINS
+
+# --- CORRECTED IMPORTS ---
+# Gets all settings from the central config file
+from config import (
+    SIMPLIFY_GITHUB_RAW,
+    ATS_DOMAINS,
+    STUDENT_FRIENDLY_TOKENS,
+    VALID_LOCATIONS,
+)
+# Gets all shared tools from the central utils file
+from utils import validate_job_url, unwrap_shorteners
+
 
 def fetch_simplify_jobs():
-    """Fetch and parse jobs from the SimplifyJobs GitHub repository (HTML-based table)."""
+    """Fetch and parse jobs from the SimplifyJobs GitHub repository."""
     try:
         response = requests.get(
             SIMPLIFY_GITHUB_RAW,
             timeout=15,
-            headers={"User-Agent": "Mozilla/5.0"}
+            headers={"User-Agent": "SASE Job Hunter Bot"},
         )
         response.raise_for_status()
     except requests.RequestException as e:
-        print(f" Error fetching SimplifyJobs GitHub: {e}")
+        print(f"⚠️  Error fetching SimplifyJobs GitHub: {e}")
         return [], {}
 
-    html = response.text
-    soup = BeautifulSoup(html, "lxml")
+    soup = BeautifulSoup(response.text, "lxml")
     jobs = []
-    skip_reasons = {"no_link": 0, "not_student_friendly": 0, "invalid_link": 0}
+    skip_reasons = {
+        "no_link": 0,
+        "not_student_friendly": 0,
+        "invalid_link": 0,
+        "skipped_for_location": 0,
+    }
 
     table_body = soup.find("tbody")
     if not table_body:
@@ -39,10 +55,11 @@ def fetch_simplify_jobs():
         role = cells[1].get_text(strip=True)
 
         loc_text = cells[2].get_text(separator="|", strip=True)
-        locations = [loc.strip() for loc in re.split(r"\|+|/+", loc_text) if loc.strip()]
+        locations = [
+            loc.strip() for loc in re.split(r"\|+|/+", loc_text) if loc.strip()
+        ]
 
-        link_cell = cells[3]
-        link_anchor = link_cell.find("a")
+        link_anchor = cells[3].find("a")
         if not link_anchor or not link_anchor.has_attr("href"):
             skip_reasons["no_link"] += 1
             continue
@@ -53,8 +70,16 @@ def fetch_simplify_jobs():
             continue
 
         title_lower = f"{company} {role}".lower()
+        # FIXED: Uses the correct variable from config.py
         if not any(t in title_lower for t in STUDENT_FRIENDLY_TOKENS):
             skip_reasons["not_student_friendly"] += 1
+            continue
+
+        # --- NEW: Location Keyword Filter ---
+        # Job is only valid if a location keyword is in the title OR locations list
+        location_check_string = (title_lower + " " + " ".join(locations)).lower()
+        if not any(loc in location_check_string for loc in VALID_LOCATIONS):
+            skip_reasons["skipped_for_location"] += 1
             continue
 
         unwrapped_url = unwrap_shorteners(apply_url)
@@ -63,35 +88,23 @@ def fetch_simplify_jobs():
             skip_reasons["invalid_link"] += 1
             continue
 
-        tags = []
-        if any(k in title_lower for k in ["intern", "internship"]):
-            tags.append("internship")
-        if any(k in title_lower for k in ["new grad", "new-grad", "entry level", "entry-level", "early career"]):
-            tags.append("new grad")
-        if any(k in title_lower for k in ["sophomore", "freshman", "junior"]):
-            tags.append("undergraduate")
-        if any(k in title_lower for k in ["summer", "co-op", "coop"]):
-            tags.append("summer")
-        if any(k in title_lower for k in ["research", "fellowship"]):
-            tags.append("research")
-
-        experience = extract_experience_requirements(final_url)
-
         job_id = hashlib.sha1(f"{company}{role}{final_url}".encode()).hexdigest()
-        jobs.append({
-            "id": job_id,
-            "title": f"{company} — {role}",
-            "url": final_url,
-            "source": "SimplifyJobs",
-            "created_utc": time.time(),
-            "locations": locations,
-            "tags": tags,
-            "experience": experience,
-            "description": ""
-        })
+        jobs.append(
+            {
+                "id": job_id,
+                "title": f"{company} — {role}",
+                "url": final_url,
+                "source": "SimplifyJobs",
+                "created_utc": time.time(),
+                "locations": locations,
+                "description": "",  # Empty description to match Reddit schema
+            }
+        )
 
-    print(f"✅ Parsed {len(jobs)} SimplifyJobs listings "
-          f"({skip_reasons['not_student_friendly']} skipped for relevance, "
-          f"{skip_reasons['invalid_link']} invalid links).")
+    print(
+        f"✅ Parsed {len(jobs)} SimplifyJobs listings "
+        f"({skip_reasons['not_student_friendly']} skipped for relevance, "
+        f"{skip_reasons['invalid_link']} invalid links)."
+    )
 
     return jobs, skip_reasons

@@ -1,160 +1,228 @@
+# main.py (hardened + strict PhD/MS filter + summary + flags)
+
+import argparse
+import re
 import time
-from config import SUBREDDITS, FETCH_LIMIT, MAX_POSTS_PER_RUN
+from pathlib import Path
+from typing import List, Dict
+
+# --- Config & clients ---
+from config import MAX_POSTS_PER_RUN
 from reddit_client import fetch_ranked_cs_jobs
 from github_feed import fetch_simplify_jobs
 from discord_client import send_to_discord
 
 POSTED_JOBS_FILE = "posted_jobs.txt"
 
-def format_age(seconds):
-    if seconds < 3600:
-        return f"{int(seconds / 60)}m"
-    elif seconds < 86400:
-        return f"{int(seconds / 3600)}h"
-    else:
-        return f"{int(seconds / 86400)}d"
+# ------------------------------
+# Utilities
+# ------------------------------
 
-def deduplicate_jobs_in_run(jobs: list[dict]) -> list[dict]:
-    """Removes duplicate jobs from a single run based on their URL."""
-    seen_urls = set()
-    deduped_jobs = []
-    for job in jobs:
-        url_key = job['url'].split('?')[0].rstrip('/')
-        if url_key not in seen_urls:
-            seen_urls.add(url_key)
-            deduped_jobs.append(job)
-    return deduped_jobs
+def _norm_url(u: str) -> str:
+    return (u or "").split("?")[0].rstrip("/")
 
-def filter_already_posted(jobs: list[dict], posted_urls: set) -> list[dict]:
-    """Filters out jobs that have already been posted in previous runs."""
-    new_jobs = []
-    for job in jobs:
-        url_key = job['url'].split('?')[0].rstrip('/')
-        if url_key not in posted_urls:
-            new_jobs.append(job)
-    return new_jobs
+def deduplicate_jobs(jobs: List[Dict]) -> List[Dict]:
+    """Remove duplicates by canonicalized URL, keep first occurrence."""
+    seen = set()
+    out = []
+    for job in jobs or []:
+        key = _norm_url(job.get("url", ""))
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(job)
+    return out
+
+# ------------------------------
+# Location filtering (CA or Remote only)
+# ------------------------------
+
+REMOTE_SYNONYMS = {
+    "remote", "remote-friendly", "remotefriendly", "work from home",
+    "wfh", "anywhere in usa", "anywhere in us", "us remote", "usa remote",
+    "north america remote", "fully remote", "hybrid (remote"
+}
+
+CA_CITIES = {
+    "san francisco", "sf", "oakland", "berkeley", "san jose", "sj",
+    "palo alto", "mountain view", "mv", "cupertino", "sunnyvale",
+    "santa clara", "menlo park", "redwood city", "fremont",
+    "los angeles", "la", "santa monica", "pasadena", "irvine",
+    "san diego", "sd", "sacramento"
+}
+
+RE_STATE_CA = re.compile(r"(?:,|\b)\s*CA(?:\b|,|$)", re.I)  # matches ", CA" / " CA " / end
+
+def _norm(s: str) -> str:
+    return re.sub(r"\s+", " ", (s or "").strip().lower())
+
+def _is_remote(text: str) -> bool:
+    t = _norm(text)
+    return any(word in t for word in REMOTE_SYNONYMS)
+
+def _is_california_location(blob: str) -> bool:
+    """True if the blob clearly indicates California (cities or state), token-aware."""
+    t = _norm(blob)
+
+    # city tokens
+    for city in CA_CITIES:
+        if re.search(rf"(?:^|[\s,;\/\-\|·•]){re.escape(city)}(?:$|[\s,;\/\-\|·•])", t):
+            return True
+
+    # 'California'
+    if re.search(r"(?:^|[\s,;\/\-\|·•])california(?:$|[\s,;\/\-\|·•])", t):
+        return True
+
+    # state code 'CA' as its own token
+    if RE_STATE_CA.search(t):
+        return True
+
+    return False
+
+def filter_by_location(jobs: List[Dict]) -> List[Dict]:
+    """
+    Keep jobs that are clearly California or Remote.
+    - Build a haystack from title + locations.
+    - Accept if remote OR California is detected.
+    - If locations list is empty, only keep if title suggests remote.
+    """
+    kept = []
+    for job in jobs or []:
+        title = job.get("title", "")
+        locs = job.get("locations") or []
+
+        if not isinstance(locs, list):
+            locs = [str(locs)]
+
+        haystack = " | ".join([title] + [str(x) for x in locs if x])
+
+        if _is_remote(haystack) or _is_california_location(haystack):
+            kept.append(job)
+            continue
+
+        if not locs and _is_remote(title):
+            kept.append(job)
+
+    return kept
+
+# ------------------------------
+# Title & date filters (strict PhD/MS guard)
+# ------------------------------
+
+RE_YEAR = re.compile(r"\b(20\d{2})\b")
+RE_BS_OR_UNDERGRAD = re.compile(r"\b(b\.?s\.?|bachelors?|undergrad(uate)?)\b", re.I)
+RE_MS = re.compile(r"\bm\.?s\.?\b|\bmasters?\b", re.I)
+RE_PHD = re.compile(r"\bph\.?d\.?\b|\bphd\b", re.I)
+
+def filter_by_title_and_date(jobs: List[Dict]) -> List[Dict]:
+    """
+    - Drop PhD roles unless BS/Undergrad is ALSO explicitly mentioned.
+    - Drop Masters-only roles unless BS/Undergrad is ALSO mentioned.
+    - Drop titles whose years are all strictly older than current year.
+    """
+    current_year = time.gmtime().tm_year
+    out = []
+    for job in jobs or []:
+        title = str(job.get("title", ""))
+
+        has_bs_or_undergrad = bool(RE_BS_OR_UNDERGRAD.search(title))
+        has_ms = bool(RE_MS.search(title))
+        has_phd = bool(RE_PHD.search(title))
+
+        # ❌ PhD roles require explicit BS/Undergrad mention to pass
+        if has_phd and not has_bs_or_undergrad:
+            continue
+
+        # ❌ Masters-only roles require explicit BS/Undergrad mention to pass
+        if has_ms and not has_bs_or_undergrad:
+            continue
+
+        # Year staleness filter
+        years = [int(y) for y in RE_YEAR.findall(title)]
+        if years and max(years) < current_year:
+            continue
+
+        out.append(job)
+    return out
+
+# ------------------------------
+# Main
+# ------------------------------
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--force", action="store_true",
+                        help="Ignore posted_jobs.txt and treat all as new.")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Do everything except send to Discord / write file.")
+    args = parser.parse_args()
+
+    overall_start_time = time.time()
     print("SASE Job Hunter v2 - Starting Run")
-    start_time = time.time()
 
-    # --- Load already posted jobs ---
-    try:
-        with open(POSTED_JOBS_FILE, "r") as f:
-            posted_urls = set(line.strip() for line in f)
-        print(f"Found {len(posted_urls)} previously posted jobs in '{POSTED_JOBS_FILE}'.")
-    except FileNotFoundError:
-        posted_urls = set()
-        print(f"'{POSTED_JOBS_FILE}' not found. Starting with a clean slate.")
+    # --- 1) Setup ---
+    posted_jobs_file = Path(POSTED_JOBS_FILE)
+    posted_jobs_file.touch(exist_ok=True)
+    posted_urls = set()
+    if not args.force:
+        posted_urls = {
+            line.strip()
+            for line in posted_jobs_file.read_text().splitlines()
+            if line.strip()
+        }
+    print(f"Found {len(posted_urls)} previously posted jobs. (force={args.force})")
 
-    # --- Fetch from all sources ---
-    reddit_jobs, reddit_stats = fetch_ranked_cs_jobs(SUBREDDITS, FETCH_LIMIT)
-    print(f"Fetched {len(reddit_jobs)} ranked jobs from Reddit.")
+    # --- 2) Fetch ---
+    reddit_jobs, _ = fetch_ranked_cs_jobs()
+    simplify_jobs, _ = fetch_simplify_jobs()
 
-    simplify_jobs, simplify_stats = fetch_simplify_jobs()
-    if simplify_jobs:
-        print("\n--- 1. DATA AT SOURCE ---")
-        print(simplify_jobs[0])
-    print("-------------------------\n")
-    print(f"Fetched {len(simplify_jobs)} jobs from SimplifyJobs GitHub.")
+    # --- 3) Process ---
+    all_jobs = (reddit_jobs or []) + (simplify_jobs or [])
+    unique_jobs_in_run = deduplicate_jobs(all_jobs)
+    title_filtered_jobs = filter_by_title_and_date(unique_jobs_in_run)
+    location_filtered_jobs = filter_by_location(title_filtered_jobs)
 
-    # --- Merge and Process ---
-    # De-duplicate and filter jobs from each source individually
-    new_reddit_jobs = filter_already_posted(deduplicate_jobs_in_run(reddit_jobs), posted_urls)
-    new_simplify_jobs = filter_already_posted(deduplicate_jobs_in_run(simplify_jobs), posted_urls)
+    if args.force:
+        new_jobs = location_filtered_jobs
+    else:
+        new_jobs = [
+            j for j in location_filtered_jobs
+            if _norm_url(j.get("url", "")) not in posted_urls
+        ]
 
-    # For summary purposes, get a list of all unique new jobs found
-    new_jobs = deduplicate_jobs_in_run(new_reddit_jobs + new_simplify_jobs)
+    # --- 4) Prepare & Post ---
+    jobs_to_post = new_jobs[:MAX_POSTS_PER_RUN]
 
-    # --- Priority-based merging ---
-    final_jobs = []
-    seen_urls = set()
+    # Summary line (always prints)
+    print(
+        f"SUMMARY — total:{len(all_jobs)} | unique:{len(unique_jobs_in_run)} "
+        f"| title_ok:{len(title_filtered_jobs)} | loc_ok:{len(location_filtered_jobs)} "
+        f"| new:{len(new_jobs)} | posting:{len(jobs_to_post)}"
+    )
 
-    # 1. Add all new Reddit jobs (priority)
-    for job in new_reddit_jobs:
-        url_key = job['url'].split('?')[0].rstrip('/')
-        if url_key not in seen_urls:
-            final_jobs.append(job)
-            seen_urls.add(url_key)
+    if not jobs_to_post:
+        print("\nNo new, relevant job posts found in this run.")
+    else:
+        if args.dry_run:
+            print("\nDRY RUN — would post:")
+            for j in jobs_to_post:
+                locs = " / ".join(j.get("locations") or [])
+                print(f"• {j.get('title')} | {locs} | {j.get('source')}")
+        else:
+            print(f"\nPosting {len(jobs_to_post)} new, relevant jobs to Discord…")
+            send_to_discord(jobs_to_post)
+            with posted_jobs_file.open("a") as f:
+                for job in jobs_to_post:
+                    f.write(_norm_url(job.get("url", "")) + "\n")
 
-    # 2. Add new Simplify jobs until the limit is reached
-    for job in new_simplify_jobs:
-        if len(final_jobs) >= MAX_POSTS_PER_RUN:
-            break
-        url_key = job['url'].split('?')[0].rstrip('/')
-        if url_key not in seen_urls:
-            final_jobs.append(job)
-            seen_urls.add(url_key)
-    
-    # Ensure the final list does not exceed the maximum number of posts
-    final_jobs = final_jobs[:MAX_POSTS_PER_RUN]
+    overall_end_time = time.time()
+    print(f"\n--- Total run completed in {overall_end_time - overall_start_time:.2f}s ---")
 
-    # Sort the final list by date for display
-    final_jobs.sort(key=lambda x: x["created_utc"], reverse=True)
-
-    # --- Display Results ---
-    print("\n--- Summary ---")
-    if "internship_pass" in reddit_stats:
-        print("Reddit - Internship Pass:")
-        intern_stats = reddit_stats["internship_pass"]
-        print(f"  - Fetched {intern_stats.get('fetched', 0)} posts, Found {intern_stats.get('filtered', 0)} jobs")
-        for reason, count in intern_stats.get('skipped', {}).items():
-            if count > 0:
-                print(f"    - Skipped {count} posts (reason: {reason})")
-
-    if "new_grad_pass" in reddit_stats:
-        print("Reddit - New Grad Pass:")
-        new_grad_stats = reddit_stats["new_grad_pass"]
-        print(f"  - Fetched {new_grad_stats.get('fetched', 0)} posts, Found {new_grad_stats.get('filtered', 0)} jobs")
-        for reason, count in new_grad_stats.get('skipped', {}).items():
-            if count > 0:
-                print(f"    - Skipped {count} posts (reason: {reason})")
-
-    print(f"SimplifyJobs: Found {len(simplify_jobs)} jobs")
-    for reason, count in simplify_stats.items():
-        if count > 0:
-            print(f"  - Skipped {count} SimplifyJobs rows (reason: {reason})")
-
-    print(f"Total new jobs found: {len(new_jobs)}")
-    print(f"Displayed top {len(final_jobs)} jobs.")
-    print(f"Run completed in {time.time() - start_time:.2f}s")
-    print("---------------")
-
-    if not final_jobs:
-        print("\nNo suitable job posts found in this run.")
-        return
-
-    print(f"\n--- Top {len(final_jobs)} Student-Friendly Job Postings ---")
-    current_time = time.time()
-    for i, job in enumerate(final_jobs, 1):
-        age_seconds = current_time - job["created_utc"]
-        age_str = format_age(age_seconds)
-        location_str = ", ".join(job['locations']) if job['locations'] else "N/A"
-
-        print(f"\n{i}) {job['title']}")
-        print(f"   Source: {job['source']} | Age: {age_str}")
-        print(f"   Location: {location_str}")
-        print(f"   Link: {job['url']}")
-        if job.get('description'):
-            snippet = job['description'][:200]
-            if len(job['description']) > 200:
-                snippet += "..."
-            print(f"   About: {snippet}")
-
-    # >>> POST to Discord (INSIDE main) <<<
-    print(f"\nPosting {len(final_jobs)} jobs to Discord…")
-        # Inside main.py
-
-   
-
-    send_to_discord(final_jobs, limit=10)
-    print("Posted to Discord call returned.")
-
-    # --- Save newly posted jobs ---
-    with open(POSTED_JOBS_FILE, "a") as f:
-        for job in final_jobs:
-            f.write(job['url'].split('?')[0].rstrip('/') + "\n")
-
-
+# call guard (helps surface hidden errors)
 if __name__ == "__main__":
-    main()
+    print("BOOT — entering main.py")
+    try:
+        main()
+    except Exception:
+        import traceback
+        traceback.print_exc()

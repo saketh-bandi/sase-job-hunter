@@ -1,38 +1,24 @@
+# utils.py
+
 import re
 import requests
 from urllib.parse import urlparse
-from bs4 import BeautifulSoup
 from requests.exceptions import RequestException, Timeout
 
-from config import ATS_DOMAINS
-
-# --- Constants ---
-MAX_VALIDATIONS_PER_RUN = 50
-VALIDATION_COUNTER = 0
-
-BLOCK_DOMAINS = [
-    "medium.com", "substack.com", "youtube.com", "news.ycombinator.com",
-    "reddit.com", "redd.it", "imgur.com", "i.redd.it"
-]
-
-ATS_SKIP_VALIDATION_DOMAINS = [
-    "greenhouse.io", "lever.co", "myworkdayjobs.com", "ashbyhq.com",
-    "smartrecruiters.com", "workable.com", "icims.com"
-]
+# All configuration is now imported from the central config file.
+from config import ATS_DOMAINS, ATS_SKIP_VALIDATION_DOMAINS, BLOCK_DOMAINS
 
 def unwrap_shorteners(url: str) -> str:
     """Unwraps shortened URLs like bit.ly, t.co, etc., with a timeout."""
     try:
-        response = requests.head(url, allow_redirects=True, timeout=4)
+        # CORRECTED: Timeout is now 2 seconds
+        response = requests.head(url, allow_redirects=True, timeout=3)
         return response.url
     except (RequestException, Timeout):
         return url
 
 def is_external_job_link(url: str) -> bool:
-    """
-    Checks if a URL is a likely external job link based on domain and path.
-    Excludes common non-job sites.
-    """
+    """Checks if a URL is a likely external job link based on domain and path."""
     if not url or not url.startswith('http'):
         return False
 
@@ -41,7 +27,7 @@ def is_external_job_link(url: str) -> bool:
     except ValueError:
         print(f"⚠️  Could not parse URL: {url}")
         return False
-        
+
     domain = parsed_url.netloc.lower()
     path = parsed_url.path.lower()
 
@@ -60,76 +46,32 @@ def is_external_job_link(url: str) -> bool:
 
 def validate_job_url(url: str) -> tuple[bool, str]:
     """
-    Validates if a job URL is active. Skips full validation for known ATS domains.
-    Returns (is_valid, final_url).
+    Validates if a job URL is active by making a HEAD request.
+    This function is now 'stateless' (it doesn't use a global counter).
     """
-    global VALIDATION_COUNTER
-    if VALIDATION_COUNTER >= MAX_VALIDATIONS_PER_RUN:
-        return False, url
-
-    VALIDATION_COUNTER += 1
-    
     headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/104.0.0.0 Safari/537.36'}
-    
+
     try:
         parsed_url = urlparse(url)
         domain = parsed_url.netloc.lower()
-        if any(ats_domain in domain for ats_domain in ATS_SKIP_VALIDATION_DOMAINS) or \
-           domain.startswith(('boards.', 'careers.', 'jobs.')):
+
+        # Skip full validation for known, reliable ATS domains for speed.
+        if any(ats_domain in domain for ats_domain in ATS_SKIP_VALIDATION_DOMAINS):
             return True, url
 
-        response = requests.head(url, headers=headers, allow_redirects=True, timeout=4)
+        # CORRECTED: Timeout is now 2 seconds
+        response = requests.head(url, headers=headers, allow_redirects=True, timeout=2)
         final_url = response.url
+
+        # If HEAD fails, try a GET request as a fallback.
         if response.status_code >= 400:
-            get_response = requests.get(url, headers=headers, timeout=4)
+            # CORRECTED: Timeout is now 2 seconds
+            get_response = requests.get(url, headers=headers, timeout=2)
             final_url = get_response.url
             if get_response.status_code >= 400:
                 return False, final_url
-        
+
         return True, final_url
 
     except (RequestException, Timeout):
         return False, url
-
-def extract_experience_requirements(url: str) -> str:
-    """
-    Fetches the job page and tries to extract experience requirements.
-    Returns a string with the findings.
-    """
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/104.0.0.0 Safari/537.36'}
-        response = requests.get(url, headers=headers, timeout=5)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.content, 'html.parser')
-        
-        text = soup.get_text().lower()
-        
-        patterns = [
-            r'(\d+\+?)\s+years? of experience',
-            r'graduating between (\w+\s+\d{4}) and (\w+\s+\d{4})',
-            r'pursuing a degree in .* and graduating in (\d{4})',
-            r'class of (\d{4})',
-            r'(freshman|sophomore|junior|senior|undergraduate|undergrad|masters|phd)',
-            r'co-op'
-        ]
-        
-        found_requirements = []
-        
-        for pattern in patterns:
-            matches = re.findall(pattern, text)
-            if matches:
-                for match in matches:
-                    if isinstance(match, tuple):
-                        found_requirements.append(" ".join(match))
-                    else:
-                        found_requirements.append(match)
-
-        if found_requirements:
-            return ", ".join(list(set(found_requirements)))
-            
-        return "N/A"
-        
-    except (RequestException, Timeout):
-        return "Could not fetch."
-    except Exception:
-        return "Error parsing."
