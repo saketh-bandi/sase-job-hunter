@@ -1,52 +1,54 @@
-# In github_feed.py
+# github_feed.py (Final, High-Speed, zero per-URL network)
 
-import requests
 import time
 import hashlib
 import re
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
+
+import requests
 from bs4 import BeautifulSoup
 
-# --- CORRECTED IMPORTS ---
-# Gets all settings from the central config file
-from config import (
-    SIMPLIFY_GITHUB_RAW,
-    ATS_DOMAINS,
-    STUDENT_FRIENDLY_TOKENS,
-    VALID_LOCATIONS,
-)
-# Gets all shared tools from the central utils file
-from utils import validate_job_url, unwrap_shorteners
+from config import SIMPLIFY_GITHUB_RAW, STUDENT_FRIENDLY_TOKENS
 
+def _canonicalize_url(u: str) -> str:
+    """
+    Local-only canonicalization: strip query/fragment, trim trailing slash.
+    No network calls.
+    """
+    try:
+        p = urlparse(u.strip())
+        # keep scheme, netloc, path; drop params/query/fragment
+        clean = urlunparse((p.scheme, p.netloc.lower(), p.path.rstrip("/"), "", "", ""))
+        return clean
+    except Exception:
+        return u.strip()
 
 def fetch_simplify_jobs():
-    """Fetch and parse jobs from the SimplifyJobs GitHub repository."""
+    """Fetch and parse jobs from the SimplifyJobs GitHub repository (fast path)."""
+    t0 = time.time()
+    print("🌐 Fetching SimplifyJobs feed...")
+
     try:
-        response = requests.get(
+        resp = requests.get(
             SIMPLIFY_GITHUB_RAW,
-            timeout=15,
+            timeout=(5, 15),  # connect, read
             headers={"User-Agent": "SASE Job Hunter Bot"},
         )
-        response.raise_for_status()
+        resp.raise_for_status()
     except requests.RequestException as e:
         print(f"⚠️  Error fetching SimplifyJobs GitHub: {e}")
         return [], {}
 
-    soup = BeautifulSoup(response.text, "lxml")
+    soup = BeautifulSoup(resp.text, "lxml")
     jobs = []
-    skip_reasons = {
-        "no_link": 0,
-        "not_student_friendly": 0,
-        "invalid_link": 0,
-        "skipped_for_location": 0,
-    }
+    skip = {"no_link": 0, "not_student_friendly": 0, "invalid_link": 0}
 
-    table_body = soup.find("tbody")
-    if not table_body:
-        print("⚠️ No <tbody> found in SimplifyJobs README.")
-        return [], skip_reasons
+    tbody = soup.find("tbody")
+    if not tbody:
+        print("⚠️  No <tbody> found in SimplifyJobs README.")
+        return [], skip
 
-    for row in table_body.find_all("tr"):
+    for row in tbody.find_all("tr"):
         cells = row.find_all("td")
         if len(cells) < 4:
             continue
@@ -54,57 +56,45 @@ def fetch_simplify_jobs():
         company = cells[0].get_text(strip=True).replace("🔥", "").strip()
         role = cells[1].get_text(strip=True)
 
+        # Locations (we keep them; main.py does CA/Remote filtering)
         loc_text = cells[2].get_text(separator="|", strip=True)
-        locations = [
-            loc.strip() for loc in re.split(r"\|+|/+", loc_text) if loc.strip()
-        ]
+        locations = [loc.strip() for loc in re.split(r"\|+|/+", loc_text) if loc.strip()]
 
-        link_anchor = cells[3].find("a")
-        if not link_anchor or not link_anchor.has_attr("href"):
-            skip_reasons["no_link"] += 1
+        a = cells[3].find("a")
+        if not a or not a.has_attr("href"):
+            skip["no_link"] += 1
             continue
 
-        apply_url = link_anchor["href"]
-        if "error=true" in apply_url:
-            skip_reasons["invalid_link"] += 1
+        apply_url = a["href"].strip()
+        if not apply_url or "error=true" in apply_url:
+            skip["invalid_link"] += 1
             continue
 
+        # Relevance: keep only student-friendly roles
         title_lower = f"{company} {role}".lower()
-        # FIXED: Uses the correct variable from config.py
-        if not any(t in title_lower for t in STUDENT_FRIENDLY_TOKENS):
-            skip_reasons["not_student_friendly"] += 1
+        if not any(tok in title_lower for tok in STUDENT_FRIENDLY_TOKENS):
+            skip["not_student_friendly"] += 1
             continue
 
-        # --- NEW: Location Keyword Filter ---
-        # Job is only valid if a location keyword is in the title OR locations list
-        location_check_string = (title_lower + " " + " ".join(locations)).lower()
-        if not any(loc in location_check_string for loc in VALID_LOCATIONS):
-            skip_reasons["skipped_for_location"] += 1
-            continue
-
-        unwrapped_url = unwrap_shorteners(apply_url)
-        is_valid, final_url = validate_job_url(unwrapped_url)
-        if not is_valid:
-            skip_reasons["invalid_link"] += 1
-            continue
+        # Zero-network canonicalization (no unwrap/validate)
+        final_url = _canonicalize_url(apply_url)
 
         job_id = hashlib.sha1(f"{company}{role}{final_url}".encode()).hexdigest()
-        jobs.append(
-            {
-                "id": job_id,
-                "title": f"{company} — {role}",
-                "url": final_url,
-                "source": "SimplifyJobs",
-                "created_utc": time.time(),
-                "locations": locations,
-                "description": "",  # Empty description to match Reddit schema
-            }
-        )
+        jobs.append({
+            "id": job_id,
+            "title": f"{company} — {role}",
+            "url": final_url,
+            "source": "SimplifyJobs",
+            "created_utc": time.time(),
+            "locations": locations,
+            "description": "",
+        })
 
+    t1 = time.time()
     print(
         f"✅ Parsed {len(jobs)} SimplifyJobs listings "
-        f"({skip_reasons['not_student_friendly']} skipped for relevance, "
-        f"{skip_reasons['invalid_link']} invalid links)."
+        f"({skip['not_student_friendly']} skipped for relevance, "
+        f"{skip['invalid_link']} invalid links). "
+        f"⏱️ {t1 - t0:.2f}s"
     )
-
-    return jobs, skip_reasons
+    return jobs, skip
