@@ -92,7 +92,7 @@ def fetch_simplify_jobs():
 
     t1 = time.time()
     print(
-        f"✅ Parsed {len(jobs)} SimplifyJobs listings "
+        f"Parsed {len(jobs)} SimplifyJobs listings "
         f"({skip['not_student_friendly']} skipped for relevance, "
         f"{skip['invalid_link']} invalid links). "
         f"⏱️ {t1 - t0:.2f}s"
