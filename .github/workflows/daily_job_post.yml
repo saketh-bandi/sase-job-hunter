@@ -4,7 +4,7 @@ name: Daily Job Post
 
 on:
   schedule:
-    - cron: '30 21 * * *'
+    - cron: '30 20 * * *'
   workflow_dispatch:
 
 jobs:
