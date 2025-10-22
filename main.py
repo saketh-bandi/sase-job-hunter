@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import List, Dict
 
 # --- Config & clients ---
-from config import MAX_POSTS_PER_RUN
+from config import MAX_POSTS_PER_RUN, UNDESIRABLE_KEYWORDS
 from reddit_client import fetch_ranked_cs_jobs
 from github_feed import fetch_simplify_jobs
 from discord_client import send_to_discord
@@ -106,44 +106,23 @@ def filter_by_location(jobs: List[Dict]) -> List[Dict]:
     return kept
 
 # ------------------------------
-# Title & date filters (strict PhD/MS guard)
+# Final Quality Filter
 # ------------------------------
 
-RE_YEAR = re.compile(r"\b(20\d{2})\b")
-RE_BS_OR_UNDERGRAD = re.compile(r"\b(b\.?s\.?|bachelors?|undergrad(uate)?)\b", re.I)
-RE_MS = re.compile(r"\bm\.?s\.?\b|\bmasters?\b", re.I)
-RE_PHD = re.compile(r"\bph\.?d\.?\b|\bphd\b", re.I)
-
-def filter_by_title_and_date(jobs: List[Dict]) -> List[Dict]:
+def filter_by_undesirables(jobs: List[Dict]) -> List[Dict]:
     """
-    - Drop PhD roles unless BS/Undergrad is ALSO explicitly mentioned.
-    - Drop Masters-only roles unless BS/Undergrad is ALSO mentioned.
-    - Drop titles whose years are all strictly older than current year.
+    Strictest and final filter. Rejects a job if its title contains any
+    undesirable keyword (e.g., "PhD", "Master's", "Senior").
+    Case-insensitive. No exceptions.
     """
-    current_year = time.gmtime().tm_year
-    out = []
+    kept = []
     for job in jobs or []:
-        title = str(job.get("title", ""))
+        title_lower = job.get("title", "").lower()
+        if any(keyword in title_lower for keyword in UNDESIRABLE_KEYWORDS):
+            continue  # Reject immediately
+        kept.append(job)
+    return kept
 
-        has_bs_or_undergrad = bool(RE_BS_OR_UNDERGRAD.search(title))
-        has_ms = bool(RE_MS.search(title))
-        has_phd = bool(RE_PHD.search(title))
-
-        # ❌ PhD roles require explicit BS/Undergrad mention to pass
-        if has_phd and not has_bs_or_undergrad:
-            continue
-
-        # ❌ Masters-only roles require explicit BS/Undergrad mention to pass
-        if has_ms and not has_bs_or_undergrad:
-            continue
-
-        # Year staleness filter
-        years = [int(y) for y in RE_YEAR.findall(title)]
-        if years and max(years) < current_year:
-            continue
-
-        out.append(job)
-    return out
 
 # ------------------------------
 # Main
@@ -179,14 +158,14 @@ def main():
     # --- 3) Process ---
     all_jobs = (reddit_jobs or []) + (simplify_jobs or [])
     unique_jobs_in_run = deduplicate_jobs(all_jobs)
-    title_filtered_jobs = filter_by_title_and_date(unique_jobs_in_run)
-    location_filtered_jobs = filter_by_location(title_filtered_jobs)
+    location_filtered_jobs = filter_by_location(unique_jobs_in_run)
+    final_filtered_jobs = filter_by_undesirables(location_filtered_jobs)
 
     if args.force:
-        new_jobs = location_filtered_jobs
+        new_jobs = final_filtered_jobs
     else:
         new_jobs = [
-            j for j in location_filtered_jobs
+            j for j in final_filtered_jobs
             if _norm_url(j.get("url", "")) not in posted_urls
         ]
 
@@ -196,8 +175,8 @@ def main():
     # Summary line (always prints)
     print(
         f"SUMMARY — total:{len(all_jobs)} | unique:{len(unique_jobs_in_run)} "
-        f"| title_ok:{len(title_filtered_jobs)} | loc_ok:{len(location_filtered_jobs)} "
-        f"| new:{len(new_jobs)} | posting:{len(jobs_to_post)}"
+        f"| loc_ok:{len(location_filtered_jobs)} "
+        f"| final_ok:{len(final_filtered_jobs)} | new:{len(new_jobs)} | posting:{len(jobs_to_post)}"
     )
 
     if not jobs_to_post:

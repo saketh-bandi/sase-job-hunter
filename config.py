@@ -9,7 +9,7 @@ SUBREDDITS = [
     "DataScienceJobs",
     "MLJobs",
 ]
-
+2
 # =============================================================================
 # Reddit Search & Filtering Strategy (Internship-Only)
 # =============================================================================
@@ -20,7 +20,7 @@ INTERNSHIP_KEYWORDS = [
 
 # A post must ALSO contain one of these to be considered a real job posting.
 HIRING_KEYWORDS = ["hiring", "apply", "job", "position", "opening"]
-
+FULL_TIME_INDICATORS = ["new grad", "bachelor's degree", "bs degree"]
 # Aggressive blocklist for rejecting low-quality discussion posts on Reddit.
 REDDIT_BLOCKLIST = [
     "list", "sharing", "compilation", "collection", "resources",
@@ -42,6 +42,16 @@ STUDENT_FRIENDLY_TOKENS = [
     "intern", "internship", "new grad", "new-grad", "entry level", "junior",
     "university", "campus", "early career", "sophomore", "freshman",
     "summer", "co-op", "coop", "research", "undergraduate", "student"
+]
+
+# =============================================================================
+# Final Quality Filter
+# =============================================================================
+# Aggressive, "no exceptions" filter to reject jobs requiring a completed degree.
+# If a job title contains any of these, it is IMMEDIATELY REJECTED.
+UNDESIRABLE_KEYWORDS = [
+    "phd", "master's", "masters", "ms", "bachelor's", "bachelors", "bs",
+    "senior", "sr.", "lead", "principal"
 ]
 
 # =============================================================================
