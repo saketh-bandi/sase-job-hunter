@@ -10,6 +10,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    # --- THIS IS THE FIX ---
+    # Add this block to grant write permissions to the job's token
+    permissions:
+      contents: write
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -29,8 +34,6 @@ jobs:
           REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
         run: python3 main.py
 
-      # --- THIS IS THE NEW STEP THAT WAS MISSING ---
-      # This step saves the updated posted_jobs.txt back to your repo.
       - name: Commit and push posted jobs log
         run: |
           git config --global user.name 'github-actions[bot]'
