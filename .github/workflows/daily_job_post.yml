@@ -1,9 +1,8 @@
-# .github/workflows/daily_job_post.yml
-
 name: Daily Job Post
 
 on:
   schedule:
+    # Runs at 16:00 UTC (which is 9:00 AM PDT)
     - cron: '0 16 * * *'
   workflow_dispatch:
 
@@ -12,7 +11,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
       - name: Set up Python 3.10
         uses: actions/setup-python@v3
@@ -27,4 +27,20 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
           REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
-        run: python3 main.py 
+        run: python3 main.py
+
+      # --- THIS IS THE NEW STEP THAT WAS MISSING ---
+      # This step saves the updated posted_jobs.txt back to your repo.
+      - name: Commit and push posted jobs log
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add posted_jobs.txt
+          # Check if there are changes to commit
+          if git diff --staged --quiet; then
+            echo "No new jobs posted, nothing to commit."
+          else
+            git commit -m "Chore: Update posted jobs log"
+            git push
+          fi
+
