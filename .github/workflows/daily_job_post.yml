@@ -1,9 +1,8 @@
 name: Daily Job Post
 
 on:
-  # schedule:
-    # Runs at 16:00 UTC (which is 9:00 AM PDT)
-    # - cron: '0 16 * * *'
+  schedule:
+    - cron: '0 16 * * *'
   workflow_dispatch:
 
 jobs:
