@@ -250,3 +250,7 @@ https://boards.greenhouse.io/embed/job_app
 https://fa-evmr-saasfaprod1.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/28624
 https://edix.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/8623
 https://asml.wd3.myworkdayjobs.com/asmlext1/job/San-Jose-CA-USA/Internship---Software-Quality-Assurance_J-00327394
+https://asml.wd3.myworkdayjobs.com/asmlext1/job/San-Jose-CA-USA/Internship---Optical-Product-Engineering--_J-00327849
+https://jobs.ashbyhq.com/Sierra/8bb2509d-9215-4cb5-8cf1-2bf0dbade6d8/application
+https://jobs.smartrecruiters.com/Sandisk/35ac1ec2-57ee-47cf-b63f-88726edb677c
+https://highmarkhealth.wd1.myworkdayjobs.com/highmark/job/PA-Working-at-Home---Pennsylvania/Sumer-2026-Software-Engineer-Graduate-Intern_J270859
