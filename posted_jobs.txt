@@ -798,3 +798,6 @@ https://job-boards.greenhouse.io/labelbox/jobs/5126745007
 https://altera.wd1.myworkdayjobs.com/altera/job/San-Jose-California-United-States/FPGA-Development-Tools-Engineer---Intern_R02448
 https://cubic.wd1.myworkdayjobs.com/cubic_USA_careers/job/San-Diego-California/Intern-Software-Engineer_REQ_48716
 https://www.mechanize.work/apply/software-engineer
+https://ace.wd5.myworkdayjobs.com/careers/job/Costa-Mesa-CA/Salesforce-Developer-Engineer-Intern_JR202635738
+https://integralads.wd1.myworkdayjobs.com/IAScareers/job/US---San-Francisco-CA/Software-Engineer-Intern_R-101475
+https://jobs.jobvite.com/nutanix/job/oPc6xfwo
