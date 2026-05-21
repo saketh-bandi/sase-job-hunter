@@ -838,3 +838,7 @@ https://jobs.ashbyhq.com/Nash/5d2387ea-c478-433b-b3db-30115d1984c5/application
 https://jobs.jobvite.com/blackboard/job/ouk3zfwa
 https://jobs.bytedance.com/en/position/7637923145297119493/detail
 https://fa-ertb-saasfaprod1.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_2/job/25999
+https://eeho.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_45001/job/334325
+https://job-boards.greenhouse.io/sparksoftcorporation/jobs/5142183007
+https://jabil.wd5.myworkdayjobs.com/Jabil_Careers/job/Remote---USA/Software-Engineering-Intern_J2445033
+https://kbr.wd5.myworkdayjobs.com/KBR_Careers/job/Mountain-View/Python-Research-Intern_R2124032
