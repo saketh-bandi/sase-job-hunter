@@ -898,3 +898,5 @@ https://fa-eups-saasfaprod1.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/
 https://jobs-bylight.icims.com/jobs/11083/job
 https://job-boards.greenhouse.io/iherb/jobs/7776154003
 https://sonyglobal.wd1.myworkdayjobs.com/SonyGlobalCareers/job/San-Diego/Software-Engineer-Intern_JR-119282
+https://jobs.ashbyhq.com/gen-digital/0818d1f1-e3c0-4a8a-afb8-72dd1265a13d/application
+https://boards.greenhouse.io/bugcrowd/jobs/8016582
